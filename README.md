@@ -51,24 +51,49 @@ the system and checks the hash.
 
 ## Install
 
-```bash
-# Flash side (sender) — pure Python, installs offline:
-pip install qrcode
+Nothing to do by hand: just use the launcher for your OS. It needs only
+Python 3.8+.
 
-# Read side (receiver, has the camera) — also pulls in numpy:
-pip install opencv-python
+| OS | command |
+|---|---|
+| macOS / Linux | `./run.sh <command> [options]` |
+| Windows | `run.bat <command> [options]` |
+| any | `python run.py <command> [options]` |
+
+Every launch, the launcher:
+
+1. uses the virtual environment that's **already active**, if there is one;
+2. otherwise uses the project's `.venv`, **creating it** if it doesn't exist
+   (set `HELIOGRAPH_VENV` to put it somewhere else);
+3. **checks every package in `requirements.txt`** and installs any that are
+   missing or the wrong version;
+4. runs `heliograph.py` with your arguments, returning its exit code.
+
+On Debian/Ubuntu, creating a venv needs the `python3-venv` package
+(`sudo apt install python3-venv`); the launcher tells you if it's missing.
+
+**Offline machine?** `qrcode` is pure Python, so you can carry it over as wheels.
+Copy the wheels over and point pip at them before launching:
+
+```bash
+PIP_NO_INDEX=1 PIP_FIND_LINKS=/path/to/wheels ./run.sh flash secret.pdf
 ```
 
-`python heliograph.py flash --mp4`/`--png` additionally need numpy/opencv.
-On an isolated sender with no internet, `qrcode` is pure Python and can be
-carried over as wheels or source.
+(On Windows: `set PIP_NO_INDEX=1` and `set PIP_FIND_LINKS=C:\path\to\wheels`,
+then `run.bat ...`.)
+
+Prefer to manage it yourself? `pip install -r requirements.txt`, then run
+`python heliograph.py ...` directly. The flash side needs only `qrcode`.
+The read side and `flash --mp4`/`--png` also need `opencv-python`/`numpy`.
 
 ## Use
+
+(Windows: use `run.bat` in place of `./run.sh`.)
 
 **On the SENDER (has the file):**
 
 ```bash
-python heliograph.py flash secret.pdf
+./run.sh flash secret.pdf
 ```
 
 Writes `secret.pdf_heliograph/player.html`. Open it in a browser, press **F**
@@ -81,7 +106,7 @@ for fullscreen. It loops the flashing QR animation forever.
 2. Get that recording onto the receiver, then:
 
 ```bash
-python heliograph.py read my-recording.mp4 --out ./recovered
+./run.sh read my-recording.mp4 --out ./recovered
 ```
 
 It reports progress and, once it has enough, writes the original file to
@@ -93,7 +118,7 @@ A **folder of still photos** works too — just pass the folder to `read`.
 **Verify the install with no hardware at all:**
 
 ```bash
-python heliograph.py selftest
+./run.sh selftest
 ```
 
 ## Options (flash)
@@ -141,4 +166,3 @@ directory and an assistant can drive the `flash` and `read` sides directly.
 ## License
 
 MIT — free to use, modify, and distribute. See [LICENSE](LICENSE).
-# heliograph

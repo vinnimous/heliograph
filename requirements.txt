@@ -1,0 +1,8 @@
+# Flash side (sender) — pure Python, offline-installable:
+qrcode
+
+# Read side (receiver, has the camera) — also pulls in numpy:
+opencv-python
+
+# Optional, only for `flash --mp4` / `--png` on the sender:
+numpy

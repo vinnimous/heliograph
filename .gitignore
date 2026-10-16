@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+# heliograph output / scratch
+*_heliograph/
+*.mp4
+recovered/
