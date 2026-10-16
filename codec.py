@@ -194,6 +194,18 @@ def pack_header(filename, file_size, K, block_size, sha256_hex):
     )
 
 
+def header_variant(header_text, n):
+    """Return the header frame with a trailing counter byte appended.
+
+    The bytes after the digest are ignored by parse_packet, so every variant
+    carries the same header. They exist because the header repeats throughout
+    the loop: if all copies were identical, a QR pattern that a particular
+    decoder can't read would make the header -- and so the file -- unreadable.
+    Varying one byte gives each copy a different QR pattern.
+    """
+    return frame_to_text(text_to_frame(header_text) + bytes([n & 0xFF]))
+
+
 def pack_data(seed, payload):
     return MAGIC + bytes([TYPE_DATA]) + struct.pack(">I", seed) + payload
 
@@ -284,10 +296,14 @@ def encode_file(data, filename, block_size=256, redundancy=2.5):
 # Decoder
 # --------------------------------------------------------------------------
 class FountainDecoder:
-    """Peeling (belief-propagation) LT decoder.
+    """Peeling (belief-propagation) LT decoder with a GF(2) fallback.
 
     Feed it the header once, then data packets in any order. It ignores
     duplicates and reports when it has enough to reconstruct the file.
+
+    Peeling alone can stall for small K (it needs a steady supply of
+    degree-1 symbols), so when it does, the remaining unknown blocks are
+    solved directly by Gaussian elimination over the stored symbols.
     """
 
     def __init__(self):
@@ -306,6 +322,7 @@ class FountainDecoder:
         self._ripple = None
         self._seen_seeds = set()
         self._pending = []                 # data packets seen before header
+        self._solve_at = 0                 # symbol count for next GF(2) attempt
 
     # -- setup ------------------------------------------------------------
     def set_header(self, info):
@@ -358,6 +375,8 @@ class FountainDecoder:
         idxs = symbol_indices(seed, self.K, self._thresholds, self._degrees)
         self._add_symbol(set(idxs), bytearray(payload))
         self._peel()
+        if self._remaining and len(self._syms) >= max(self._remaining, self._solve_at):
+            self.try_solve()
         return True
 
     # -- core peeling -----------------------------------------------------
@@ -399,6 +418,51 @@ class FountainDecoder:
                     if len(nb2) == 1:
                         self._ripple.append(sid2)
             self._block_to_syms[i].clear()
+
+    def try_solve(self):
+        """Solve the blocks peeling couldn't, by Gaussian elimination over GF(2).
+
+        Each stored symbol is an equation: the XOR of its unsolved neighbour
+        blocks equals its value. Bitmasks and values are Python ints, so XOR
+        of whole rows is cheap. Attempts back off geometrically, so the total
+        cost stays proportional to the final attempt. Returns True if complete.
+        """
+        if not self.ready or not self._remaining:
+            return self.is_complete()
+        self._solve_at = len(self._syms) + max(1, len(self._syms) // 4)
+        pivots = {}                        # highest bit -> (mask, value)
+        for neighbors, value in self._syms:
+            if not neighbors:
+                continue
+            mask = 0
+            for i in neighbors:
+                mask |= 1 << i
+            val = int.from_bytes(value, "big")
+            while mask:
+                hb = mask.bit_length() - 1
+                if hb not in pivots:
+                    pivots[hb] = (mask, val)
+                    break
+                pmask, pval = pivots[hb]
+                mask ^= pmask
+                val ^= pval
+        if len(pivots) < self._remaining:
+            return False                   # not enough independent equations yet
+        # Back-substitute from the lowest pivot up: every other bit in a
+        # pivot's row is lower, so it has already been solved.
+        solved = {}
+        for hb in sorted(pivots):
+            mask, val = pivots[hb]
+            mask ^= 1 << hb
+            while mask:
+                low = mask & -mask
+                val ^= solved[low.bit_length() - 1]
+                mask ^= low
+            solved[hb] = val
+        for i, val in solved.items():
+            self._solved[i] = val.to_bytes(self.block_size, "big")
+        self._remaining = 0
+        return True
 
     # -- status / output --------------------------------------------------
     @property
@@ -456,6 +520,7 @@ def _selftest():
         else:
             # header may never have been injected if kept was tiny
             dec.add_packet(parse_packet(text_to_frame(header)))
+            dec.try_solve()
 
         good = dec.is_complete() and dec.verify() and dec.result() == data
         max_qr = max(len(f) for f in frames)

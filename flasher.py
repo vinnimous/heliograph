@@ -27,6 +27,7 @@ need numpy, and --mp4 needs opencv.
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -72,12 +73,16 @@ def qr_matrix(text, ec="M"):
 
 
 def build_sequence(header_text, data_frames, header_every=12):
-    """Interleave the header flash through the data flashes for the loop."""
+    """Interleave the header flash through the data flashes for the loop.
+
+    Each repeat is a slightly different variant of the header (see
+    codec.header_variant) so no single unreadable QR pattern can block it.
+    """
     seq = [("H", header_text)]
     for i, f in enumerate(data_frames):
         seq.append(("D", f))
         if (i + 1) % header_every == 0:
-            seq.append(("H", header_text))
+            seq.append(("H", codec.header_variant(header_text, len(seq))))
     return seq
 
 
@@ -105,6 +110,8 @@ PLAYER_HTML = r"""<!doctype html>
     border-radius:6px; padding:6px 12px; font-size:13px; cursor:pointer; }
   button:hover { background:#2a2b31; }
   #hint { font-size:12px; color:#6f6f7a; }
+  #sha { font-size:12px; color:#8a8a95; font-family:ui-monospace,Menlo,Consolas,monospace;
+    word-break:break-all; text-align:center; padding:0 12px; }
   #prog { height:4px; background:#1e1f24; width:min(80vw,520px); border-radius:2px;
     overflow:hidden; }
   #progfill { height:100%; width:0; background:#e0a43b; }
@@ -124,6 +131,7 @@ PLAYER_HTML = r"""<!doctype html>
     <button id="pause">pause</button>
     <button id="fs">fullscreen (F)</button>
   </div>
+  <div id="sha">sha256 __SHA__</div>
   <div id="hint">Point the receiving station's camera at the white panel. Let it flash until the other side reads a complete file.</div>
 </div>
 <script>
@@ -207,7 +215,7 @@ schedule();
 """
 
 
-def write_player(path, name, fps, header_every, seq_matrices):
+def write_player(path, name, fps, header_every, seq_matrices, sha256_hex=""):
     data = {
         "name": name,
         "fps": fps,
@@ -217,6 +225,7 @@ def write_player(path, name, fps, header_every, seq_matrices):
     }
     html = (PLAYER_HTML
             .replace("__NAME__", name.replace("<", "&lt;").replace(">", "&gt;"))
+            .replace("__SHA__", sha256_hex)
             .replace("__DATA__", json.dumps(data, separators=(",", ":"))))
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html)
@@ -300,7 +309,9 @@ def main(argv=None):
     outdir = args.out or (args.input.rstrip("/\\") + "_heliograph")
     os.makedirs(outdir, exist_ok=True)
 
+    sha256_hex = hashlib.sha256(data).hexdigest()
     print(f"Flashing {name} ({len(data):,} bytes)")
+    print(f"  sha256 {sha256_hex}")
     header_text, data_frames = codec.encode_file(
         data, name, block_size=args.block_size, redundancy=args.redundancy)
     K = max(1, (len(data) + args.block_size - 1) // args.block_size)
@@ -317,7 +328,7 @@ def main(argv=None):
     print(f"  QR module grid: {grid_n}x{grid_n}")
 
     player = os.path.join(outdir, "player.html")
-    write_player(player, name, args.fps, args.header_every, seq_matrices)
+    write_player(player, name, args.fps, args.header_every, seq_matrices, sha256_hex)
     print(f"  wrote {player}")
 
     if args.mp4:
@@ -332,6 +343,7 @@ def main(argv=None):
     print(f"\nOne full loop is about {loop_seconds:.0f}s at {args.fps} fps.")
     print("Open player.html, press F for fullscreen, and let it flash.")
     print("On the other station:  python heliograph.py read <your-recording>")
+    print(f"It should report a sha256 PASS matching {sha256_hex}")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ Dependencies: opencv-python, numpy (both pulled in by `pip install opencv-python
 """
 
 import argparse
+import hashlib
 import os
 import sys
 
@@ -64,7 +65,8 @@ def read_flashes(detector, frame):
     """Pull one or more QR payloads ("flashes") out of a camera frame.
 
     Tries the raw frame, then a grayscale upscale, which rescues small or
-    slightly blurry codes.
+    slightly blurry codes, then a padded and a downscaled copy: OpenCV fails on
+    some QR patterns at one scale/margin and reads them fine at another.
     """
     results = []
     try:
@@ -77,9 +79,17 @@ def read_flashes(detector, frame):
         return results
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     big = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-    data, _, _ = detector.detectAndDecode(big)
-    if data:
-        results.append(data)
+    pad = max(16, min(gray.shape) // 8)
+    retries = (
+        big,
+        cv2.copyMakeBorder(gray, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255),
+        cv2.resize(gray, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA),
+    )
+    for img in retries:
+        data, _, _ = detector.detectAndDecode(img)
+        if data:
+            results.append(data)
+            break
     return results
 
 
@@ -137,15 +147,20 @@ def main(argv=None):
     if not dec.ready:
         sys.exit("FAILED: never read a header flash. Film from the start of a loop, "
                  "get closer/steadier, and keep the whole QR panel in view.")
-    if not dec.is_complete():
+    if not dec.is_complete() and not dec.try_solve():
         sys.exit(f"INCOMPLETE: recovered {dec.solved_count}/{dec.K} blocks. "
                  f"Film another full loop (flashes accumulate across a longer recording) "
                  f"or improve focus/lighting, then try again.")
 
     data = dec.result()
-    ok = dec.verify()
+    actual = hashlib.sha256(data).hexdigest()
+    ok = actual == dec.sha256
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, os.path.basename(dec.filename) or "recovered.bin")
+    if not ok:
+        # Never leave a corrupt file under the real name, where it could be
+        # mistaken for a good copy.
+        out_path += ".corrupt"
     if os.path.exists(out_path):
         base, e = os.path.splitext(out_path)
         k = 1
@@ -157,9 +172,13 @@ def main(argv=None):
 
     print(f"RECOVERED {dec.filename}: {len(data):,} bytes -> {out_path}")
     print(f"sha256 integrity check: {'PASS ✓' if ok else 'FAIL ✗ (file is corrupt)'}")
-    print(f"  expected {dec.sha256}")
+    print(f"  expected {dec.sha256}  (from the sender)")
+    print(f"  actual   {actual}  (of the recovered file)")
     if not ok:
+        print("The corrupt copy was kept as *.corrupt for inspection; do not use it. "
+              "Film another loop and read again.")
         sys.exit(1)
+    print("Tip: compare 'expected' with the sha256 shown on the sender's screen.")
 
 
 if __name__ == "__main__":

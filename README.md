@@ -113,6 +113,12 @@ It reports progress and, once it has enough, writes the original file to
 `./recovered` and prints a sha256 **PASS/FAIL**. If it says INCOMPLETE, film
 another loop (or a longer clip) and run it again — flashes accumulate.
 
+The sender prints the file's sha256 and shows it under the player; the receiver
+prints both the **expected** hash (from the sender) and the **actual** hash of
+what it rebuilt. Compare the expected hash with the one on the sender's screen
+for an independent check. On a FAIL, the receiver saves the result as
+`<name>.corrupt`, never under the real filename, and exits non-zero.
+
 A **folder of still photos** works too — just pass the folder to `read`.
 
 **Verify the install with no hardware at all:**
